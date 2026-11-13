@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+# Model binaries are downloaded and hash-verified, not committed
+models/*.onnx
+models/*.npz
+credential_provider/build/
+*.egg-info/
+# Never commit biometric data or secrets
+*.npy
+*.bin
+*.dpapi
+enroll_*/
+/build/
+# Local AI-assistant instructions; not published
+CLAUDE.md

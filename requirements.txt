@@ -1,0 +1,7 @@
+# Runtime
+numpy==1.26.4
+opencv-python==4.10.0.84
+onnxruntime==1.20.1
+psutil==6.1.1
+pywin32==308
+# Dev-only tools are in requirements-dev.txt, so they never land in the SYSTEM runtime.

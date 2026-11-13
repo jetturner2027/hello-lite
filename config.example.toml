@@ -1,0 +1,47 @@
+# Copy to %ProgramData%\FaceUnlock\config.toml. Every key is optional.
+# Unknown keys are rejected so typos can't silently fall back to defaults.
+
+[camera]
+index = 0
+width = 640
+height = 480
+warmup_frames = 3
+face_exposure = true          # backlit (window behind you): lengthen exposure until your face is bright enough
+dark_face_brightness = 60.0   # face grey level (0-255) below which that kicks in; normal light ~85
+target_face_brightness = 85.0
+exposure_start = -6.0         # driver units, log2 seconds: -6 = 1/64 s
+exposure_max = -3.0           # 1/8 s; longer blurs
+exposure_settle_frames = 3
+
+[detect]
+score_threshold = 0.9   # YuNet confidence
+min_face_px = 80        # ignore faces narrower than this (pixels)
+rival_ratio = 0.6       # verify fails if another face is >= this fraction of yours; smaller ones are ignored
+
+[match]
+threshold = 0.363       # SFace cosine similarity; raise to be stricter
+top_k = 3               # score = mean of the k best enrolled samples
+
+[vote]
+required = 3            # frames that must pass match + passive liveness...
+window = 5              # ...out of this many
+
+[liveness]
+passive_threshold = 0.5 # MiniFASNet "real" probability per frame; measured: you ~0.72 median, phone photos 0.00
+challenge = false       # true = also require a random head turn (stronger vs video replay, slower)
+turn_ratio = 0.25       # how far the nose must move off-center (x eye distance)
+frontal_ratio = 0.12    # how centered counts as "back to frontal"
+
+[verify]
+timeout_s = 8.0         # whole verify, including the head turn
+
+[presence]
+idle_minutes = 3.0      # camera is never touched before this much input idle time
+check_interval_s = 20.0
+absent_checks_to_lock = 3
+frames_per_check = 5
+pause_processes = []    # e.g. ["AnyDesk.exe"]; RDP is detected automatically
+
+[service]
+max_failures = 5        # then face unlock is off until a password unlock
+allow_test_clients = false  # phase 4 testing only: accept any SYSTEM client, not just LogonUI
