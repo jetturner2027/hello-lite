@@ -1,11 +1,28 @@
 # hello-lite
 
-Windows Hello-style face unlock and walk-away lock for any RGB webcam, no IR
-camera needed. Not affiliated with Microsoft; "Windows Hello" is their trademark.
+**Face unlock for laptops that don't have Windows Hello hardware.**
 
-You glance at the lock screen and it signs you in in about a second (measured on
-an i3-1005G1). Your PIN and password keep working the whole time. Leave the desk
-and it locks.
+Windows Hello face sign-in only works with an infrared (IR) camera, and most
+budget and older laptops don't have one. hello-lite brings the same
+glance-to-unlock experience to the ordinary 720p webcam those laptops already
+have. You don't need to buy new hardware.
+
+- **Glance and go:** wake the lock screen and look at it. It signs you in in
+  about a second.
+- **Walk-away lock:** leave your desk and it locks behind you.
+- **Built for low-end hardware:** developed and benchmarked on an Intel Core
+  i3-1005G1 with 8 GB RAM. A verify takes ~1.2 s. There's no TensorFlow or
+  PyTorch, and nothing heavy stays in memory between unlocks.
+- **Your PIN and password always work**, alongside face unlock, never replaced
+  by it.
+
+Not affiliated with Microsoft; "Windows Hello" is their trademark.
+
+> **Honest caveat:** an IR camera is what makes Windows Hello hard to fool. An
+> ordinary webcam can't see depth or heat, so hello-lite is a *convenience*
+> feature, not biometric security. It checks for photo/screen spoofs and
+> rate-limits failures, but a determined attacker with a good video or mask may
+> get through. Details in [docs/SECURITY.md](docs/SECURITY.md).
 
 RGB-webcam face unlock and walk-away auto-lock for Windows 10/11. A lighter,
 safer take on the ideas in caochitam/windows-face-unlock: OpenCV + ONNX
