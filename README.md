@@ -1,4 +1,11 @@
-# Face Unlock for Windows
+# hello-lite
+
+Windows Hello-style face unlock and walk-away lock for any RGB webcam, no IR
+camera needed. Not affiliated with Microsoft; "Windows Hello" is their trademark.
+
+You glance at the lock screen and it signs you in in about a second (measured on
+an i3-1005G1). Your PIN and password keep working the whole time. Leave the desk
+and it locks.
 
 RGB-webcam face unlock and walk-away auto-lock for Windows 10/11. A lighter,
 safer take on the ideas in caochitam/windows-face-unlock: OpenCV + ONNX
