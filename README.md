@@ -18,12 +18,6 @@ have. You don't need to buy new hardware.
 
 Not affiliated with Microsoft; "Windows Hello" is their trademark.
 
-> **Honest caveat:** an IR camera is what makes Windows Hello hard to fool. An
-> ordinary webcam can't see depth or heat, so hello-lite is a *convenience*
-> feature, not biometric security. It checks for photo/screen spoofs and
-> rate-limits failures, but a determined attacker with a good video or mask may
-> get through. Details in [docs/SECURITY.md](docs/SECURITY.md).
-
 RGB-webcam face unlock and walk-away auto-lock for Windows 10/11. A lighter,
 safer take on the ideas in caochitam/windows-face-unlock: OpenCV + ONNX
 Runtime only (no TensorFlow/PyTorch at runtime), nothing resident beyond a
