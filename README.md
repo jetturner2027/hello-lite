@@ -21,7 +21,8 @@ Not affiliated with Microsoft; "Windows Hello" is their trademark.
 RGB-webcam face unlock and walk-away auto-lock for Windows 10/11. A lighter,
 safer take on the ideas in caochitam/windows-face-unlock: OpenCV + ONNX
 Runtime only (no TensorFlow/PyTorch at runtime), nothing resident beyond a
-small idle service, and unlock-only scope.
+small idle service (the face models are preloaded only while the screen is
+locked, and dropped on unlock), and unlock-only scope.
 
 **This is convenience, not security.** RGB-only liveness can't stop a good
 replay or mask. By default unlock is look-and-go: no head turn

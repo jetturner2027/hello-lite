@@ -45,6 +45,11 @@ class FaceServiceCore:
         # A service restart has the same effect, which fails closed.
         self._armed = False
 
+    @property
+    def face_available(self) -> bool:
+        """Face unlock could be used right now (armed and not locked out)."""
+        return self._armed and self._limiter.allowed
+
     # --- session events (from SERVICE_CONTROL_SESSIONCHANGE) -----------------
 
     def on_session_lock(self, session_id: int) -> None:

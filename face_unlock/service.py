@@ -26,7 +26,6 @@ import sys
 import threading
 import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from pathlib import Path
 
@@ -46,6 +45,7 @@ from face_unlock.camera import Camera, CameraError
 from face_unlock.config import Config, data_dir, load_config
 from face_unlock.exposure import expose_for_face
 from face_unlock.liveness import Direction
+from face_unlock.model_cache import ModelCache
 from face_unlock.protocol import MESSAGE_LEN, PIPE_NAME
 from face_unlock.ratelimit import FailureLimiter
 from face_unlock.secure_store import ensure_secrets_dir
@@ -84,62 +84,99 @@ class AfterReply:
                 logging.getLogger("faceunlock.service").exception("after-reply clean-up failed")
 
 
-def make_verify_fn(cfg: Config, after_reply: AfterReply, cancelled: Callable[[], bool] = lambda: False):
-    """Models and the gallery are loaded per request and dropped after, so the
-    idle service holds no models and no biometric data in memory."""
+def load_models(cfg: Config) -> tuple[object, object, object]:
+    """Detector, embedder, liveness, each run once so the first real frame is fast."""
     from face_unlock.detection import FaceDetector, FaceEmbedder
     from face_unlock.liveness import PassiveLiveness
+
+    models = (FaceDetector(cfg.detect.score_threshold), FaceEmbedder(), PassiveLiveness())
+    _warm_up(cfg, *models)
+    return models
+
+
+def _warm_up(cfg: Config, detector: object, embedder: object, live: object) -> None:
+    """ONNX Runtime and OpenCV DNN allocate buffers and pick kernels on the first call,
+    which measured up to ~1 s extra on the i3. Pay that now, on a blank frame and a
+    synthetic face box: no camera, no real face, nothing kept."""
+    import numpy as np
+
+    from face_unlock.detection import Face
+
+    try:
+        w, h = cfg.camera.width, cfg.camera.height
+        frame = np.zeros((h, w, 3), np.uint8)
+        s = min(w, h) / 3
+        x, y = (w - s) / 2, (h - s) / 2
+        cx, eye_y = x + s / 2, y + 0.4 * s
+        raw = [x, y, s, s, cx - 0.2 * s, eye_y, cx + 0.2 * s, eye_y, cx, y + 0.6 * s,
+               cx - 0.15 * s, y + 0.8 * s, cx + 0.15 * s, y + 0.8 * s, 0.99]
+        face = Face(np.array(raw, np.float32))
+        detector.detect(frame)  # type: ignore[attr-defined]
+        embedder.embed(frame, face)  # type: ignore[attr-defined]
+        live.score(frame, face)  # type: ignore[attr-defined]
+    except Exception as e:  # noqa: BLE001 - warm-up is an optimization; never fail a load over it
+        logging.getLogger("faceunlock.service").warning("model warm-up skipped: %s", type(e).__name__)
+
+
+def make_verify_fn(
+    cfg: Config,
+    after_reply: AfterReply,
+    cancelled: Callable[[], bool] = lambda: False,
+    models: ModelCache | None = None,
+):
+    """The gallery (biometric data) is loaded per request and dropped after. Models
+    come from `models`, which the service preloads when the session locks and drops
+    when it unlocks, so the unlocked, idle service holds neither."""
     from face_unlock.verifier import Verifier
+
+    cache = models if models is not None else ModelCache(lambda: load_models(cfg))
 
     def verify(direction: Direction | None) -> VerifyResult:
         try:
             gallery = stores.load_gallery(dev=False)
         except FileNotFoundError:
             return VerifyResult(False, Reason.NOT_ENROLLED)
-        # Model loading (~1.2 s) and camera start-up (~0.5 s) are both mostly waiting on
-        # native code, so overlap them. Models load on the worker thread; the camera
-        # stays on this thread because DirectShow objects are tied to the creating thread
-        # (the pipe loop runs after_reply on this same thread).
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            models = pool.submit(
-                lambda: (FaceDetector(cfg.detect.score_threshold), FaceEmbedder(), PassiveLiveness())
-            )
-            verifier = None
-            camera = ExitStack()
-            # Per-stage times for the attempt log (numbers only), to see where a slow
-            # unlock spends its time: camera start, waiting on models, exposure, voting.
-            stages: dict[str, float] = {}
-            t = time.monotonic()
+        # Usually already loaded (preloaded at lock). If not, the load (~1.2 s) runs on
+        # the cache's worker thread while this thread starts the camera (~0.5 s). The
+        # camera stays on this thread because DirectShow objects are tied to the
+        # creating thread (the pipe loop runs after_reply on this same thread).
+        loading = cache.get()
+        verifier = None
+        camera = ExitStack()
+        # Per-stage times for the attempt log (numbers only), to see where a slow
+        # unlock spends its time: camera start, waiting on models, exposure, voting.
+        stages: dict[str, float] = {}
+        t = time.monotonic()
 
-            def lap(name: str) -> None:
-                nonlocal t
-                now = time.monotonic()
-                stages[name] = (now - t) * 1000
-                t = now
+        def lap(name: str) -> None:
+            nonlocal t
+            now = time.monotonic()
+            stages[name] = (now - t) * 1000
+            t = now
 
-            try:
-                cam = camera.enter_context(Camera(cfg.camera))
-                lap("camera")
-                detector, embedder, live = models.result()
-                lap("models")  # extra wait only; loading overlaps the camera start
-                if cfg.camera.face_exposure:
-                    exp = expose_for_face(cam, detector, cfg.camera)
-                    lap("exposure")
-                    if exp.exposure is not None:
-                        stages["exp"] = exp.exposure  # the camera setting chosen (log2 s), not a face value
-                verifier = Verifier(cfg, detector, embedder, live, cancelled=cancelled)
-                result = verifier.verify(cam, gallery, direction)
-                result.timings_ms = {**stages, **result.timings_ms}
-                # Only a verify that finished normally defers the release; on any exception
-                # the finally below closes the camera right away.
-                after_reply.add(camera.pop_all().close)
-                after_reply.add(gc.collect)
-                return result
-            except CameraError:
-                return VerifyResult(False, Reason.CAMERA_ERROR)
-            finally:
-                camera.close()  # no-op once handed to after_reply
-                del verifier, gallery
+        try:
+            cam = camera.enter_context(Camera(cfg.camera))
+            lap("camera")
+            detector, embedder, live = loading.result()
+            lap("models")  # extra wait only; loading overlaps the camera start
+            if cfg.camera.face_exposure:
+                exp = expose_for_face(cam, detector, cfg.camera)
+                lap("exposure")
+                if exp.exposure is not None:
+                    stages["exp"] = exp.exposure  # the camera setting chosen (log2 s), not a face value
+            verifier = Verifier(cfg, detector, embedder, live, cancelled=cancelled)
+            result = verifier.verify(cam, gallery, direction)
+            result.timings_ms = {**stages, **result.timings_ms}
+            # Only a verify that finished normally defers the release; on any exception
+            # the finally below closes the camera right away.
+            after_reply.add(camera.pop_all().close)
+            after_reply.add(gc.collect)
+            return result
+        except CameraError:
+            return VerifyResult(False, Reason.CAMERA_ERROR)
+        finally:
+            camera.close()  # no-op once handed to after_reply
+            del verifier, gallery
 
     return verify
 
@@ -174,7 +211,10 @@ class FaceUnlockService(win32serviceutil.ServiceFramework):
         # _lock (which that verify holds), so an unlock stops the camera within a frame.
         self._cancel = threading.Event()
         try:
-            self._cfg = load_config()
+            cfg = load_config()
+            # Models are preloaded on lock and dropped on unlock (see model_cache.py).
+            self._models: ModelCache = ModelCache(lambda: load_models(cfg))
+            self._cfg = cfg
             ensure_secrets_dir()
             audit = attempt_logger(data_dir() / "logs")
             self._audit = audit
@@ -182,7 +222,7 @@ class FaceUnlockService(win32serviceutil.ServiceFramework):
             self._after_reply = AfterReply()
             self._core = FaceServiceCore(
                 limiter,
-                make_verify_fn(self._cfg, self._after_reply, self._cancel.is_set),
+                make_verify_fn(self._cfg, self._after_reply, self._cancel.is_set, self._models),
                 audit,
                 challenge_required=self._cfg.liveness.challenge,
             )
@@ -202,8 +242,14 @@ class FaceUnlockService(win32serviceutil.ServiceFramework):
         # Before taking _lock: a verify in progress holds it until it finishes.
         if event_type == WTS_SESSION_LOCK:
             self._cancel.clear()
+            # Preload only when face unlock could actually be used on this lock screen.
+            if self._core.face_available:
+                self._models.warm()
         elif event_type in (WTS_SESSION_UNLOCK, WTS_SESSION_LOGOFF):
             self._cancel.set()
+            if self._models.loaded:
+                self._models.drop()
+                gc.collect()
         with self._lock:
             if event_type == WTS_SESSION_LOCK:
                 self._core.on_session_lock(session_id)
