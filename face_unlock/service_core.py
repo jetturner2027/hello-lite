@@ -119,7 +119,7 @@ class FaceServiceCore:
         if result.ok:
             self._limiter.record_success()
             self._last_face_success = self._clock()
-            log_attempt(self._audit, "verify", "ok", "", result.frames, ms)
+            log_attempt(self._audit, "verify", "ok", "", result.frames, ms, result.timings_ms)
             return reply(Status.OK)
 
         # Environmental failures (no camera, nobody in frame) don't count toward lockout:
@@ -127,7 +127,7 @@ class FaceServiceCore:
         # NOT_LOCKED here means the check was cancelled because you unlocked another way.
         if result.reason not in (Reason.CAMERA_ERROR, Reason.NO_FACE, Reason.NOT_ENROLLED, Reason.NOT_LOCKED):
             self._limiter.record_failure()
-        log_attempt(self._audit, "verify", "fail", result.reason.name, result.frames, ms)
+        log_attempt(self._audit, "verify", "fail", result.reason.name, result.frames, ms, result.timings_ms)
         if not self._limiter.allowed:
             return reply(Status.DISABLED, Reason.RATE_LIMITED)
         return reply(Status.FAIL, result.reason)

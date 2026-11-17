@@ -18,5 +18,15 @@ def attempt_logger(log_dir: Path) -> logging.Logger:
     return logger
 
 
-def log_attempt(logger: logging.Logger, kind: str, result: str, reason: str, frames: int = 0, ms: float = 0.0) -> None:
-    logger.info("%s\t%s\t%s\tframes=%d\tms=%.0f", kind, result, reason, frames, ms)
+def log_attempt(
+    logger: logging.Logger,
+    kind: str,
+    result: str,
+    reason: str,
+    frames: int = 0,
+    ms: float = 0.0,
+    stages: dict[str, float] | None = None,
+) -> None:
+    """`stages` is a per-stage time breakdown in ms (numbers only, e.g. camera, models)."""
+    extra = "".join(f"\t{k}={v:.0f}" for k, v in (stages or {}).items())
+    logger.info("%s\t%s\t%s\tframes=%d\tms=%.0f%s", kind, result, reason, frames, ms, extra)

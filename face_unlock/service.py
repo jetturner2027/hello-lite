@@ -24,6 +24,7 @@ import logging
 import os
 import sys
 import threading
+import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
@@ -105,13 +106,30 @@ def make_verify_fn(cfg: Config, after_reply: AfterReply, cancelled: Callable[[],
             )
             verifier = None
             camera = ExitStack()
+            # Per-stage times for the attempt log (numbers only), to see where a slow
+            # unlock spends its time: camera start, waiting on models, exposure, voting.
+            stages: dict[str, float] = {}
+            t = time.monotonic()
+
+            def lap(name: str) -> None:
+                nonlocal t
+                now = time.monotonic()
+                stages[name] = (now - t) * 1000
+                t = now
+
             try:
                 cam = camera.enter_context(Camera(cfg.camera))
+                lap("camera")
                 detector, embedder, live = models.result()
+                lap("models")  # extra wait only; loading overlaps the camera start
                 if cfg.camera.face_exposure:
-                    expose_for_face(cam, detector, cfg.camera)
+                    exp = expose_for_face(cam, detector, cfg.camera)
+                    lap("exposure")
+                    if exp.exposure is not None:
+                        stages["exp"] = exp.exposure  # the camera setting chosen (log2 s), not a face value
                 verifier = Verifier(cfg, detector, embedder, live, cancelled=cancelled)
                 result = verifier.verify(cam, gallery, direction)
+                result.timings_ms = {**stages, **result.timings_ms}
                 # Only a verify that finished normally defers the release; on any exception
                 # the finally below closes the camera right away.
                 after_reply.add(camera.pop_all().close)

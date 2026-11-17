@@ -67,6 +67,15 @@ IFACEMETHODIMP Provider::SetUsageScenario(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpu
     // prompts) and CPUS_CHANGE_PASSWORD get E_NOTIMPL, which tells LogonUI this
     // provider doesn't take part, so no tile appears there at all. Windows 10+
     // reports the lock screen as CPUS_LOGON, hence the session check.
+    // LogonUI can re-initialize this same provider object while the lock screen is
+    // up (UnAdvise, then SetUsageScenario/SetUserArray/Advise again). The previous
+    // AutoUnlock is stopped and can't start twice, so begin each cycle with a fresh
+    // one; otherwise auto-unlock stays off for the rest of that lock screen.
+    if (auto_) {
+        auto_->ClearEvents();
+        auto_->Stop();
+    }
+    auto_ = AutoUnlock::Create();
     const SessionState s = CurrentSessionState();
     unlockScenario_ = ShouldParticipate(cpus, s);
     Trace("SetUsageScenario cpus=%d known=%d user=%d locked=%d -> %s", static_cast<int>(cpus), s.known, s.hasUser,
