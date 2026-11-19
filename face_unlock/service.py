@@ -181,6 +181,16 @@ def make_verify_fn(
     return verify
 
 
+def client_gone(pipe: int) -> bool:
+    """True once the client end of a connected pipe has been closed. PeekNamedPipe
+    reads nothing; it just fails with BROKEN_PIPE when the other side is gone."""
+    try:
+        win32pipe.PeekNamedPipe(pipe, 0)
+    except pywintypes.error as e:
+        return e.winerror in (winerror.ERROR_BROKEN_PIPE, winerror.ERROR_PIPE_NOT_CONNECTED, winerror.ERROR_NO_DATA)
+    return False
+
+
 def _wait(handle: int, ov: pywintypes.OVERLAPPED, stop: int, timeout_ms: int) -> int | None:
     """Wait for an overlapped op; returns bytes transferred, or None on stop/timeout (op cancelled)."""
     rc = win32event.WaitForMultipleObjects([ov.hEvent, stop], False, timeout_ms)
@@ -210,6 +220,7 @@ class FaceUnlockService(win32serviceutil.ServiceFramework):
         # Set on unlock/logoff, cleared on lock. Read by a running verify without taking
         # _lock (which that verify holds), so an unlock stops the camera within a frame.
         self._cancel = threading.Event()
+        self._client_pipe: int | None = None  # the pipe of the request being served
         try:
             cfg = load_config()
             # Models are preloaded on lock and dropped on unlock (see model_cache.py).
@@ -222,7 +233,7 @@ class FaceUnlockService(win32serviceutil.ServiceFramework):
             self._after_reply = AfterReply()
             self._core = FaceServiceCore(
                 limiter,
-                make_verify_fn(self._cfg, self._after_reply, self._cancel.is_set, self._models),
+                make_verify_fn(self._cfg, self._after_reply, self._verify_cancelled, self._models),
                 audit,
                 challenge_required=self._cfg.liveness.challenge,
             )
@@ -311,6 +322,16 @@ class FaceUnlockService(win32serviceutil.ServiceFramework):
             logging.shutdown()
             os._exit(1)
 
+    def _verify_cancelled(self) -> bool:
+        """Checked every frame by a running verify. Stop when the session unlocked
+        another way, or when the client hung up: LogonUI re-initialized or closed the
+        lock screen, so nobody will read the answer. Either way the result would be
+        thrown away, so stop using the camera (and the attempt isn't counted)."""
+        if self._cancel.is_set():
+            return True
+        pipe = self._client_pipe
+        return pipe is not None and client_gone(pipe)
+
     def _serve_one(self, pipe: int) -> None:
         ov = _overlapped()
         rc = win32pipe.ConnectNamedPipe(pipe, ov)
@@ -332,7 +353,11 @@ class FaceUnlockService(win32serviceutil.ServiceFramework):
             if n is None:
                 return
             with self._lock:
-                response = self._core.handle(bytes(buf[:n]), winapi.active_console_session())
+                self._client_pipe = pipe
+                try:
+                    response = self._core.handle(bytes(buf[:n]), winapi.active_console_session())
+                finally:
+                    self._client_pipe = None
             ov = _overlapped()
             win32file.WriteFile(pipe, response, ov)
             if _wait(pipe, ov, self._stop, IO_TIMEOUT_MS) is None:

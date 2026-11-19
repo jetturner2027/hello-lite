@@ -11,6 +11,8 @@ namespace {
 
 constexpr DWORD kVerifyTimeoutMs = 20000;  // same as the tile's own verify
 constexpr DWORD kPollMs = 250;
+constexpr int kStatusTries = 6;         // first try + 5 retries...
+constexpr DWORD kStatusRetryMs = 1000;  // ...1 s apart (each try may also wait up to 2 s for the pipe)
 constexpr wchar_t kPropState[] = L"FaceUnlockAutoState";
 constexpr wchar_t kPropOldProc[] = L"FaceUnlockAutoOldProc";
 
@@ -186,8 +188,17 @@ void AutoUnlock::Run() {
     Status st = Status::Error;
     Reason rs = Reason::Internal;
     uint8_t flags = 0;
-    HRESULT shr = CallService(MsgType::Status, Direction::None, 3000, &st, &rs, &flags);
-    Trace("auto: status hr=0x%08lx st=%d flags=%d", static_cast<unsigned long>(shr), static_cast<int>(st), flags);
+    // The service may be busy finishing a check for the previous lock-screen instance
+    // (LogonUI re-initialized us mid-check): the pipe is then busy for a few seconds
+    // until the service notices the hang-up. Retry instead of giving up for the whole
+    // lock screen. A clear "off" answer (Disabled / challenge mode) is final.
+    HRESULT shr = E_FAIL;
+    for (int attempt = 0; attempt < kStatusTries; ++attempt) {
+        if (attempt > 0 && WaitForSingleObject(stop_, kStatusRetryMs) == WAIT_OBJECT_0) return;
+        shr = CallService(MsgType::Status, Direction::None, 3000, &st, &rs, &flags);
+        Trace("auto: status hr=0x%08lx st=%d flags=%d", static_cast<unsigned long>(shr), static_cast<int>(st), flags);
+        if (SUCCEEDED(shr)) break;
+    }
     if (FAILED(shr) || st != Status::Ok || (flags & kFlagChallenge)) return;
 
     DisplayWatch ws;
